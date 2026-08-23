@@ -17,6 +17,8 @@
   const MAX_CONTENT_UNIT_ASCENT = 7
   const MIN_DISCOVERED_UNIT_WIDTH = 120
   const MIN_DISCOVERED_UNIT_HEIGHT = 48
+  const MAX_EBAY_IDENTITY_REQUESTS = 2
+  const MAX_EBAY_IDENTITY_QUEUE = 24
   const LINKEDIN_POST_UNIT_SELECTOR =
     '[class*="feed-shared-update" i], [data-urn^="urn:li:activity:"]'
   const LINKEDIN_COMMENT_UNIT_SELECTOR =
@@ -40,6 +42,8 @@
   ].join(',')
   const ETSY_LISTING_UNIT_SELECTOR =
     '[data-shop-id], [data-listing-id], [class*="etsy-listing-card" i], [class*="v2-listing-card" i]'
+  const EBAY_LISTING_UNIT_SELECTOR =
+    '[data-listingid], [data-ebay-listing-id], .s-card, .s-item'
   const CAROUSELL_LISTING_TEST_ID = /^listing-card-\d+$/
   const SEMANTIC_SELECTOR = [
     'article',
@@ -49,6 +53,8 @@
     'tr',
     '[data-card]',
     '[data-listing-id]',
+    '[data-listingid]',
+    '[data-ebay-listing-id]',
     '[data-testid*="card" i]',
     '[data-testid*="listing" i]',
     '[class~="card"]',
@@ -79,6 +85,8 @@
     'tr',
     '[data-card]',
     '[data-listing-id]',
+    '[data-listingid]',
+    '[data-ebay-listing-id]',
     '[data-testid*="card" i]',
     '[data-testid*="listing" i]',
     '[class~="card"]',
@@ -118,6 +126,10 @@
 
   function isEtsyHostname(hostname) {
     return hostname === 'etsy.com' || hostname.endsWith('.etsy.com')
+  }
+
+  function isEbayHostname(hostname) {
+    return /^(?:[a-z0-9-]+\.)*ebay\.[a-z]{2,3}(?:\.[a-z]{2})?$/i.test(hostname)
   }
 
   function getMutedStorageKey(siteKey) {
@@ -178,6 +190,21 @@
               scope: 'carousell-listing',
               container: controller.resolveFilterBoundary(unit),
             }
+      },
+    },
+    {
+      id: 'ebay-listing',
+      discover(controller, context) {
+        return (
+          controller.findEbayListingUnit(context.hoveredElement) ||
+          controller.findEbayListingUnit(context.target)
+        )
+      },
+      accepts(controller, unit) {
+        return controller.isEbayPage() || Boolean(controller.getEbayItemInfo(unit))
+      },
+      resolve(controller, unit) {
+        return controller.findEbayListingIdentity(unit)
       },
     },
     {
@@ -289,7 +316,12 @@
       this.pendingPoint = null
       this.identityResult = null
       this.identityRetryTimer = 0
+      this.identityRequestToken = 0
       this.hoveredElement = null
+      this.ebayIdentityCache = new Map()
+      this.ebayIdentityPromises = new Map()
+      this.ebayIdentityQueue = []
+      this.ebayActiveIdentityRequests = 0
 
       this.onPointerMove = this.onPointerMove.bind(this)
       this.onClick = this.onClick.bind(this)
@@ -322,6 +354,7 @@
       this.locked = false
       this.target = null
       this.identityResult = null
+      this.identityRequestToken += 1
       this.hoveredElement = null
       this.candidates = []
       this.candidateIndex = -1
@@ -833,6 +866,7 @@
 
     setTarget(target) {
       clearTimeout(this.identityRetryTimer)
+      const identityRequestToken = ++this.identityRequestToken
       if (!target) {
         this.target = null
         this.identityResult = null
@@ -857,6 +891,9 @@
       if (result.status === 'none' && this.isYouTubePage()) {
         this.scheduleIdentityRetry(this.target)
       }
+      if (result.status === 'none' && result.ruleId === 'ebay-listing') {
+        this.resolveEbayIdentityForTarget(this.target, identityRequestToken)
+      }
     }
 
     scheduleIdentityRetry(target) {
@@ -873,6 +910,31 @@
           this.labelElement.textContent = `${description.label} · ${description.width}×${description.height}`
         }
       }, 350)
+    }
+
+    async resolveEbayIdentityForTarget(target, identityRequestToken) {
+      const unit = this.findEbayListingUnit(target)
+      if (!unit) return
+
+      await this.requestEbayListingIdentity(unit)
+      if (
+        !this.active ||
+        identityRequestToken !== this.identityRequestToken ||
+        !target.isConnected
+      ) {
+        return
+      }
+
+      const result = this.findEbayListingIdentity(unit)
+      this.identityResult = result
+      this.renderIdentity(result)
+      if (result.status === 'found' && result.container) {
+        this.target = result.container
+        this.positionBox(this.target)
+        const description = this.describeTarget(this.target)
+        this.labelElement.textContent = `${description.label} · ${description.width}×${description.height}`
+      }
+      if (this.locked) this.showConfirmation()
     }
 
     findIdentity(target) {
@@ -1146,6 +1208,277 @@
     isEtsyPage() {
       const host = location.hostname.replace(/^www\./i, '').toLowerCase()
       return isEtsyHostname(host)
+    }
+
+    isEbayPage() {
+      const host = location.hostname.replace(/^www\./i, '').toLowerCase()
+      return isEbayHostname(host)
+    }
+
+    findEbayListingUnit(target) {
+      if (!(target instanceof Element)) return null
+
+      const closestUnit = target.closest(EBAY_LISTING_UNIT_SELECTOR)
+      if (closestUnit && this.getEbayItemInfo(closestUnit)) return closestUnit
+
+      let current = target
+      for (let depth = 0; current && depth <= MAX_CONTENT_UNIT_ASCENT; depth += 1) {
+        if (
+          this.getEbayItemInfo(current) &&
+          (current.matches(CONTENT_UNIT_SELECTOR) || this.isRepeatedContentUnit(current))
+        ) {
+          return current
+        }
+        current = current.parentElement
+      }
+
+      const nestedUnits = [...target.querySelectorAll(EBAY_LISTING_UNIT_SELECTOR)]
+        .filter((element) => this.getEbayItemInfo(element))
+      return nestedUnits.length === 1 ? nestedUnits[0] : null
+    }
+
+    getEbayItemInfo(container) {
+      if (!(container instanceof Element)) return null
+
+      const attributeId = (
+        container.getAttribute('data-listingid') ||
+        container.getAttribute('data-ebay-listing-id') ||
+        ''
+      ).trim()
+      const anchors = []
+      if (container.matches('a[href]')) anchors.push(container)
+      anchors.push(...container.querySelectorAll('a[href]'))
+
+      let parsedLink = null
+      for (const anchor of anchors.slice(0, 50)) {
+        parsedLink = this.parseEbayItemUrl(anchor.getAttribute('href') || anchor.href)
+        if (parsedLink && (!attributeId || parsedLink.itemId === attributeId)) break
+        parsedLink = null
+      }
+
+      const itemId = /^\d{9,15}$/.test(attributeId) ? attributeId : parsedLink?.itemId
+      if (!itemId) return null
+
+      let origin = parsedLink?.origin || location.origin
+      try {
+        const host = new URL(origin).hostname.replace(/^www\./i, '').toLowerCase()
+        if (!isEbayHostname(host)) return null
+      } catch {
+        return null
+      }
+
+      if (this.isEbayPage()) origin = location.origin
+      return { itemId, href: `${origin}/itm/${itemId}` }
+    }
+
+    parseEbayItemUrl(href) {
+      let url
+      try {
+        url = new URL(href, location.href)
+      } catch {
+        return null
+      }
+
+      const host = url.hostname.replace(/^www\./i, '').toLowerCase()
+      if (!isEbayHostname(host)) return null
+
+      const segments = url.pathname.split('/').filter(Boolean)
+      const itemIndex = segments.findIndex((segment) => segment.toLowerCase() === 'itm')
+      if (itemIndex < 0) return null
+
+      const itemId = segments.slice(itemIndex + 1).find((segment) => /^\d{9,15}$/.test(segment))
+      return itemId ? { itemId, origin: url.origin } : null
+    }
+
+    findEbayListingIdentity(unit) {
+      const itemInfo = this.getEbayItemInfo(unit)
+      if (!itemInfo) return { status: 'none', reason: 'No eBay item link found' }
+
+      const localIdentity = this.findEbaySellerInContainer(unit, itemInfo.href)
+      if (localIdentity) this.ebayIdentityCache.set(itemInfo.itemId, localIdentity)
+      const cachedIdentity = this.ebayIdentityCache.get(itemInfo.itemId)
+      const identity = localIdentity || cachedIdentity
+      if (identity) {
+        return {
+          ...identity,
+          relationship: 'listing-owner',
+          scope: localIdentity ? 'ebay-listing' : 'ebay-item-page',
+          container: this.resolveFilterBoundary(unit),
+        }
+      }
+
+      return {
+        status: 'none',
+        reason: this.ebayIdentityCache.has(itemInfo.itemId)
+          ? 'No seller found for this eBay listing'
+          : 'Checking this eBay listing for its seller…',
+        scope: 'ebay-listing',
+        container: this.resolveFilterBoundary(unit),
+      }
+    }
+
+    findEbaySellerInContainer(container, baseHref = location.href) {
+      const attributeNode =
+        container.closest('[data-seller-username], [data-seller-id]') ||
+        container.querySelector('[data-seller-username], [data-seller-id]')
+      const attributeUsername =
+        attributeNode?.getAttribute('data-seller-username') ||
+        attributeNode?.getAttribute('data-seller-id')
+      const attributeIdentity = this.createEbaySellerIdentity(attributeUsername, baseHref)
+      if (attributeIdentity) return attributeIdentity
+
+      const linkedUsername = this.findEbaySellerUsernameInAnchors(
+        container.querySelectorAll('a[href]'),
+        baseHref
+      )
+      const linkedIdentity = this.createEbaySellerIdentity(linkedUsername, baseHref)
+      if (linkedIdentity) return linkedIdentity
+
+      const lines = (container.innerText || container.textContent || '')
+        .split('\n')
+        .map((line) => line.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+      for (const line of lines) {
+        const match = line.match(
+          /^(.+?)\s+\d{1,3}(?:\.\d+)?%\s+positive(?:\s+feedback)?(?:\s+\([^)]+\))?$/i
+        )
+        const identity = this.createEbaySellerIdentity(match?.[1], baseHref)
+        if (identity) return identity
+      }
+
+      for (const image of container.querySelectorAll('img[alt]')) {
+        const match = (image.getAttribute('alt') || '').match(/^Visit (.+?) eBay Store!?$/i)
+        const identity = this.createEbaySellerIdentity(match?.[1], baseHref)
+        if (identity) return identity
+      }
+
+      return null
+    }
+
+    findEbaySellerInDocument(documentRoot, baseHref) {
+      const username = this.findEbaySellerUsernameInAnchors(
+        documentRoot.querySelectorAll('a[href]'),
+        baseHref
+      )
+      return this.createEbaySellerIdentity(username, baseHref)
+    }
+
+    findEbaySellerUsernameInAnchors(anchors, baseHref) {
+      for (const anchor of [...anchors].slice(0, 500)) {
+        let url
+        try {
+          url = new URL(anchor.getAttribute('href') || anchor.href, baseHref)
+        } catch {
+          continue
+        }
+
+        const host = url.hostname.replace(/^www\./i, '').toLowerCase()
+        if (!isEbayHostname(host)) continue
+
+        const username = /(?:fdbk|feedback)/i.test(url.pathname)
+          ? url.searchParams.get('username')
+          : ''
+        if (this.normalizeEbayUsername(username)) return username
+
+        const segments = url.pathname.split('/').filter(Boolean)
+        if (segments[0]?.toLowerCase() === 'usr' && this.normalizeEbayUsername(segments[1])) {
+          return decodeURIComponent(segments[1])
+        }
+      }
+
+      return ''
+    }
+
+    normalizeEbayUsername(value) {
+      const username = String(value || '').trim()
+      if (!/^[a-z0-9][a-z0-9_.-]{1,63}$/i.test(username)) return ''
+      if (/^(?:seller|user|member|profile)$/i.test(username)) return ''
+      return username.toLowerCase()
+    }
+
+    createEbaySellerIdentity(value, baseHref) {
+      const username = this.normalizeEbayUsername(value)
+      if (!username) return null
+
+      let origin
+      try {
+        const url = new URL(baseHref, location.href)
+        const host = url.hostname.replace(/^www\./i, '').toLowerCase()
+        if (!isEbayHostname(host)) return null
+        origin = url.origin
+      } catch {
+        return null
+      }
+
+      return {
+        status: 'found',
+        key: `ebay:seller:${username}`,
+        label: String(value).trim(),
+        type: 'seller',
+        href: `${origin}/usr/${encodeURIComponent(username)}`,
+        entityId: username,
+        entityIdLabel: 'Seller username',
+        score: 30,
+      }
+    }
+
+    requestEbayListingIdentity(unit) {
+      const itemInfo = this.getEbayItemInfo(unit)
+      if (!itemInfo) return Promise.resolve(null)
+      if (this.ebayIdentityCache.has(itemInfo.itemId)) {
+        return Promise.resolve(this.ebayIdentityCache.get(itemInfo.itemId))
+      }
+
+      const existing = this.ebayIdentityPromises.get(itemInfo.itemId)
+      if (existing) return existing
+      if (this.ebayIdentityQueue.length >= MAX_EBAY_IDENTITY_QUEUE) {
+        return Promise.resolve(null)
+      }
+
+      const promise = new Promise((resolve) => {
+        this.ebayIdentityQueue.push({ itemInfo, resolve })
+        this.drainEbayIdentityQueue()
+      })
+      this.ebayIdentityPromises.set(itemInfo.itemId, promise)
+      return promise
+    }
+
+    drainEbayIdentityQueue() {
+      while (
+        this.ebayActiveIdentityRequests < MAX_EBAY_IDENTITY_REQUESTS &&
+        this.ebayIdentityQueue.length
+      ) {
+        const task = this.ebayIdentityQueue.shift()
+        this.ebayActiveIdentityRequests += 1
+        this.fetchEbayListingIdentity(task.itemInfo)
+          .catch(() => null)
+          .then((identity) => {
+            this.ebayIdentityCache.set(task.itemInfo.itemId, identity)
+            this.ebayIdentityPromises.delete(task.itemInfo.itemId)
+            task.resolve(identity)
+          })
+          .finally(() => {
+            this.ebayActiveIdentityRequests -= 1
+            this.drainEbayIdentityQueue()
+          })
+      }
+    }
+
+    async fetchEbayListingIdentity(itemInfo) {
+      if (!this.isEbayPage()) return null
+
+      const url = new URL(itemInfo.href)
+      if (url.origin !== location.origin) return null
+
+      const response = await fetch(url.href, {
+        credentials: 'same-origin',
+        redirect: 'follow',
+      })
+      if (!response.ok) return null
+
+      const html = await response.text()
+      const documentRoot = new DOMParser().parseFromString(html, 'text/html')
+      return this.findEbaySellerInDocument(documentRoot, response.url || url.href)
     }
 
     isCarousellPage() {
@@ -1519,6 +1852,15 @@
         return { site: 'carousell', type: 'seller', href: url.href }
       }
 
+      if (isEbayHostname(host) && segments[0]?.toLowerCase() === 'usr' && segments[1]) {
+        const username = this.normalizeEbayUsername(segments[1])
+        if (!username) return null
+        url.pathname = `/usr/${encodeURIComponent(username)}`
+        url.search = ''
+        url.hash = ''
+        return { site: 'ebay', type: 'seller', href: url.href }
+      }
+
       if ((host === 'linkedin.com' || host.endsWith('.linkedin.com')) && ['in', 'company', 'school', 'showcase'].includes(segments[0])) {
         if (!segments[1]) return null
         url.pathname = `/${segments[0]}/${segments[1]}`
@@ -1573,6 +1915,8 @@
         const typeLabel = result.type[0].toUpperCase() + result.type.slice(1)
         const sources = {
           surrounding: 'found in surrounding box',
+          'ebay-listing': 'seller shown on this eBay listing',
+          'ebay-item-page': 'seller found from this eBay item page',
           'etsy-shop-id': 'shop ID on this listing',
           'video-unit': 'linked in this video box',
           'page-context': 'linked beside this content',
@@ -1736,7 +2080,10 @@
       this.blockedKeywords = []
       this.scanTimer = 0
       this.observer = null
+      this.pendingEbayScanItems = new Set()
       this.ready = Promise.resolve()
+
+      this.onViewportChange = this.onViewportChange.bind(this)
     }
 
     async init() {
@@ -1763,7 +2110,12 @@
         if (mutations.some((mutation) => mutation.addedNodes.length)) this.scheduleScan()
       })
       this.observer.observe(document.documentElement, { childList: true, subtree: true })
+      window.addEventListener('scroll', this.onViewportChange, { passive: true })
       this.applyState()
+    }
+
+    onViewportChange() {
+      if (this.controller.isEbayPage()) this.scheduleScan()
     }
 
     ensureHiddenStyle() {
@@ -1903,12 +2255,42 @@
           const target = this.controller.resolveFilterBoundary(contentTarget)
           checkedTargets.add(target)
           if (key && mutedKeys.has(key)) hiddenTargets.add(target)
+
+          if (
+            result.status === 'none' &&
+            result.ruleId === 'ebay-listing' &&
+            this.isInViewport(unit)
+          ) {
+            this.resolveEbayUnitForScan(unit)
+          }
         }
       }
 
       for (const target of checkedTargets) {
         target.toggleAttribute(HIDDEN_ATTRIBUTE, hiddenTargets.has(target))
       }
+    }
+
+    isInViewport(unit) {
+      const rect = unit.getBoundingClientRect()
+      return rect.bottom >= 0 && rect.top <= window.innerHeight && rect.width > 0 && rect.height > 0
+    }
+
+    resolveEbayUnitForScan(unit) {
+      const itemInfo = this.controller.getEbayItemInfo(unit)
+      if (
+        !itemInfo ||
+        this.controller.ebayIdentityCache.has(itemInfo.itemId) ||
+        this.pendingEbayScanItems.has(itemInfo.itemId)
+      ) {
+        return
+      }
+
+      this.pendingEbayScanItems.add(itemInfo.itemId)
+      this.controller.requestEbayListingIdentity(unit).finally(() => {
+        this.pendingEbayScanItems.delete(itemInfo.itemId)
+        if (this.controller.ebayIdentityCache.has(itemInfo.itemId)) this.scheduleScan()
+      })
     }
 
     revealAll() {

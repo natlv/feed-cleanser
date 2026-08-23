@@ -9,7 +9,7 @@ dependencies.
 The extension currently provides:
 
 - A Manifest V3 extension using `activeTab`, `scripting`, and local extension storage
-- Automatic page-local filtering on normal HTTP(S) pages, with no network calls
+- Automatic page-local filtering on normal HTTP(S) pages, with bounded same-site eBay item-page lookups when a visible card omits its seller
 - A global on/off switch that is independent from profile detection
 - Per-hostname muted profile sets stored only on the current device
 - Per-hostname blocked keywords matched case-insensitively against card text
@@ -26,7 +26,9 @@ The extension currently provides:
 - LinkedIn actor/profile-link and YouTube channel-link recognition
 - Carousell `/u/<username>` seller-link recognition
 - Etsy listing-card `data-shop-id` extraction, preserving the stable numeric shop ID
-- Marketplace listing-cell collapsing for Carousell and Etsy so filtered grids reflow
+- eBay listing-card seller recognition from seller rows, profile links, and stable item IDs
+- At most two concurrent eBay item-page lookups, limited to visible cards and cached only for the current page session
+- Marketplace listing-cell collapsing for Carousell, eBay, and Etsy so filtered grids reflow
 - YouTube watch-player lookup when the visible owner link sits beside the player
 - YouTube video-unit lookup across thumbnail/channel sibling branches, including rich grids
 - One bounded retry for YouTube components that hydrate shortly after hover
@@ -50,16 +52,17 @@ mute. Ambiguous boxes cannot be muted.
 Detection runs through a shared page-local pipeline:
 
 1. Discover a semantic unit, an identity-seeded repeated unit, or a supported site scope.
-2. Collect linked identity candidates inside that scope.
-3. Classify each candidate's relationship to the content.
-4. Canonicalize the winning profile URL or stable entity ID.
-5. Resolve ambiguity before allowing a mute.
-6. Hide the repeated grid, flex, or list boundary when a saved rule matches.
+2. Collect linked identity candidates or supported stable marketplace IDs inside that scope.
+3. For an eBay card without seller metadata, resolve its item page through a bounded same-site request.
+4. Classify each candidate's relationship to the content.
+5. Canonicalize the winning profile URL or stable entity ID.
+6. Resolve ambiguity before allowing a mute.
+7. Hide the repeated grid, flex, or list boundary when a saved rule matches.
 
 Supported-site behavior is registered in the ordered `IDENTITY_SCOPE_RULES`
 table in `content.js`. LinkedIn retains a focused ownership adapter because its
 posts, comments, mentions, and social-context links require different treatment.
-Carousell, Etsy, YouTube, and page-header handling use the same pipeline stages
+Carousell, eBay, Etsy, YouTube, and page-header handling use the same pipeline stages
 and shared filter-boundary resolver as the generic fallback.
 
 For LinkedIn, detected ownership and future mute matching are deliberately
@@ -70,7 +73,7 @@ make that surrounding post match the muted entity. A matching comment can be
 removed at the comment boundary while leaving the post intact, so following the
 post author does not need to be inferred from fragile feed markup.
 
-TLDR current state: the detection works for Linkedin and Carousell and Youtube and Reddit. Etsy listing cards expose a stable numeric `data-shop-id`, which is now captured directly without depending on the displayed shop name. Doesn't work at all yet for Ebay or Pinterest (expected because creator names are not displayed until you click on a specific listing). Instagram is deferred because its native controls cover basic account muting.
+TLDR current state: the detection works for LinkedIn, Carousell, eBay, YouTube, Reddit, and Etsy. eBay seller rows are read directly when available; seller-less visible cards use a throttled same-site item-page lookup and a page-session cache. Pinterest is not supported yet because pin owners are not consistently present in feed cards. Instagram is deferred because its native controls cover basic account muting.
 
 ## Try it in Chrome
 
@@ -110,7 +113,8 @@ plain repeated `<div>` result rows, LinkedIn-shaped legacy and current-renderer
 posts with nested comments, inline tagged profiles, and social attribution, plus YouTube-shaped video cards with and
 without a detectable channel. It also includes a Carousell username link and a
 multi-column YouTube rich-grid structure, an overlapping multi-identity box,
-and an Etsy card with separate listing and shop IDs. Use **Block demo keywords**
+an Etsy card with separate listing and shop IDs, and an eBay card plus detail-page
+seller signals. Use **Block demo keywords**
 to hide the existing keyboard plus nested Carousell/Etsy-shaped field-watch
 cells, then **Add live ACME listing** to verify that a dynamically inserted
 keyword match is hidden. You can also add that listing after muting ACME Audio

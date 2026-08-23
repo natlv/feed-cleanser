@@ -298,6 +298,17 @@
             </article>
           </div>
 
+          <div class="marketplace-cell">
+            <article class="s-card platform-card" data-fixture="ebay-listing" data-listingid="226160233772">
+              <div class="platform-media" aria-label="eBay listing thumbnail">◈</div>
+              <div class="platform-copy">
+                <h3><a class="s-card__link" href="https://www.ebay.com/itm/226160233772?itmmeta=fixture">Sleep earbuds</a></h3>
+                <div class="s-card__attribute-row"><span>ankerdirect 99.8% positive (280.9K)</span></div>
+                <p>The seller row supplies a stable eBay username while the surrounding grid cell collapses.</p>
+              </div>
+            </article>
+          </div>
+
           <article class="platform-card">
             <div class="platform-media" aria-label="Listing after the Etsy card">◆</div>
             <div class="platform-copy">
@@ -352,6 +363,14 @@
         const discoveredUnits = controller.discoverContentUnits()
         const genericRepeatedUnit = document.querySelector('[data-fixture="generic-repeated-owner"]')
         const genericRepeatedIdentity = detect('generic-repeated-owner')
+        const ebayDetailDocument = new DOMParser().parseFromString(
+          '<a href="https://www.ebay.com/fdbk/mweb_profile?item_id=226160233772&amp;username=ankerdirect">All ratings</a>',
+          'text/html'
+        )
+        const ebayDetailIdentity = controller.findEbaySellerInDocument(
+          ebayDetailDocument,
+          'https://www.ebay.com/itm/226160233772'
+        )
         const previousProfiles = engine.profiles
         engine.profiles = [{ key: genericRepeatedIdentity.key }]
         engine.scan()
@@ -360,6 +379,11 @@
         ).length
         const otherGenericHidden = document
           .querySelector('[data-fixture="generic-repeated-other"]')
+          .hasAttribute('data-mute-by-entity-hidden')
+        const ebayIdentity = detect('ebay-listing')
+        engine.profiles = [{ key: ebayIdentity.key }]
+        engine.scan()
+        const ebayListingHidden = boundary('ebay-listing')
           .hasAttribute('data-mute-by-entity-hidden')
         engine.profiles = previousProfiles
         engine.revealAll()
@@ -381,6 +405,12 @@
           ['Etsy rule', detect('etsy-listing').ruleId === 'etsy-listing'],
           ['Etsy stable shop ID', detect('etsy-listing').entityId === '43008218'],
           ['Etsy grid boundary', detect('etsy-listing').container.classList.contains('marketplace-cell')],
+          ['eBay rule', detect('ebay-listing').ruleId === 'ebay-listing'],
+          ['eBay seller username', detect('ebay-listing').entityId === 'ankerdirect'],
+          ['eBay canonical seller URL', detect('ebay-listing').href === 'https://www.ebay.com/usr/ankerdirect'],
+          ['eBay grid boundary', detect('ebay-listing').container.classList.contains('marketplace-cell')],
+          ['eBay automatic filtering', ebayListingHidden],
+          ['eBay detail-page parser', ebayDetailIdentity?.key === 'ebay:seller:ankerdirect'],
         ]
         return {
           passed: checks.filter(([, passed]) => passed).length,
