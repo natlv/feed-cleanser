@@ -19,6 +19,7 @@
   const MIN_DISCOVERED_UNIT_HEIGHT = 48
   const MAX_EBAY_IDENTITY_REQUESTS = 2
   const MAX_EBAY_IDENTITY_QUEUE = 24
+  const CONTENT_REPRESENTATION_VERSION = 1
   const LINKEDIN_POST_UNIT_SELECTOR =
     '[class*="feed-shared-update" i], [data-urn^="urn:li:activity:"]'
   const LINKEDIN_COMMENT_UNIT_SELECTOR =
@@ -107,6 +108,28 @@
     'ytd-comment-thread-renderer',
     'ytd-comment-view-model',
   ].join(',')
+  const CONTENT_HEADING_SELECTOR = 'h1,h2,h3,h4,[role="heading"]'
+  const CONTENT_BODY_SELECTOR = [
+    '[data-testid="expandable-text-box"]',
+    '[itemprop="description"]',
+    '[class*="description" i]',
+    'p',
+  ].join(',')
+  const CONTENT_PRICE_SELECTOR = [
+    '[itemprop="price"]',
+    '[data-testid*="price" i]',
+    '[class*="price" i]',
+  ].join(',')
+  const NESTED_TEXT_UNIT_SELECTOR = [
+    'article',
+    '[role="article"]',
+    '[role="listitem"]',
+    '[class*="comments-comment-item" i]',
+    '[class*="comments-reply-item" i]',
+    '[componentkey^="replaceableComment_"]',
+    'ytd-comment-thread-renderer',
+    'ytd-comment-view-model',
+  ].join(',')
   const IDENTITY_WORDS =
     /actor|author|attribution|byline|seller|vendor|merchant|shop|store|user|username|profile|creator|channel|poster|commenter|comment-author|member|owner|publisher|metadata/i
   const PRIMARY_IDENTITY_WORDS =
@@ -138,6 +161,10 @@
 
   function normalizeKeyword(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+  }
+
+  function normalizeContentText(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ')
   }
 
   function normalizeBlockedKeywords(keywords) {
@@ -833,6 +860,99 @@
 
       for (const inspectedElement of inspected) cache?.set(inspectedElement, null)
       return null
+    }
+
+    isInNestedTextUnit(element, unit) {
+      let current = element.parentElement
+      while (current && current !== unit) {
+        if (current.matches(NESTED_TEXT_UNIT_SELECTOR)) return true
+        current = current.parentElement
+      }
+      return false
+    }
+
+    getContentFieldTexts(unit, selector) {
+      const values = []
+      for (const element of unit.querySelectorAll(selector)) {
+        if (this.isInNestedTextUnit(element, unit)) continue
+        const value = normalizeContentText(element.innerText)
+        if (value && !values.includes(value)) values.push(value)
+      }
+      return values
+    }
+
+    inferContentKind(unit) {
+      const signals = [
+        unit.tagName,
+        unit.id,
+        unit.className,
+        unit.getAttribute('role'),
+        unit.getAttribute('data-testid'),
+      ].join(' ')
+
+      if (
+        unit.matches(
+          `${LINKEDIN_COMMENT_UNIT_SELECTOR}, ${LINKEDIN_CURRENT_COMMENT_SELECTOR}, ` +
+          'ytd-comment-thread-renderer, ytd-comment-view-model'
+        ) ||
+        /\bcomment|\breply/i.test(signals)
+      ) {
+        return { value: 'comment', source: 'comment-signals' }
+      }
+      if (unit.matches(YOUTUBE_VIDEO_UNIT_SELECTOR)) {
+        return { value: 'video', source: 'youtube-unit' }
+      }
+      if (
+        unit.matches(`${ETSY_LISTING_UNIT_SELECTOR}, ${EBAY_LISTING_UNIT_SELECTOR}`) ||
+        CAROUSELL_LISTING_TEST_ID.test(unit.getAttribute('data-testid') || '') ||
+        /\blisting|\bproduct|\bresult(?:-|_|\s)*row/i.test(signals)
+      ) {
+        return { value: 'listing', source: 'listing-signals' }
+      }
+      if (
+        unit.matches(`${LINKEDIN_POST_UNIT_SELECTOR}, article, [role="article"]`) ||
+        /\bpost|\bfeed/i.test(signals)
+      ) {
+        return { value: 'post', source: 'post-signals' }
+      }
+      return { value: 'unknown', source: 'fallback' }
+    }
+
+    extractContentRepresentation(unit) {
+      if (!(unit instanceof HTMLElement)) return null
+
+      const visibleText = unit.innerText || ''
+      const normalizedVisibleText = normalizeContentText(visibleText)
+      const kind = this.inferContentKind(unit)
+      const title = this.getContentFieldTexts(unit, CONTENT_HEADING_SELECTOR)[0] || ''
+      const bodyParts = this.getContentFieldTexts(unit, CONTENT_BODY_SELECTOR)
+        .filter((value) => value !== title)
+      const body = bodyParts.join('\n')
+      const price = this.getContentFieldTexts(unit, CONTENT_PRICE_SELECTOR)
+        .sort((first, second) => first.length - second.length)[0] || ''
+      const semanticParts = [title, body].filter(Boolean)
+      const semanticText = semanticParts.length
+        ? semanticParts.join('\n')
+        : normalizedVisibleText
+
+      return {
+        version: CONTENT_REPRESENTATION_VERSION,
+        kind: kind.value,
+        title,
+        body,
+        visibleText,
+        semanticText,
+        metadata: {
+          price,
+        },
+        provenance: {
+          kind: kind.source,
+          title: title ? 'heading' : 'none',
+          body: body ? 'body-elements' : 'none',
+          price: price ? 'price-element' : 'none',
+          semanticText: semanticParts.length ? 'structured-fields' : 'visible-text-fallback',
+        },
+      }
     }
 
     discoverContentUnits(root = document) {
@@ -2242,7 +2362,8 @@
         checkedTargets.add(filterTarget)
 
         if (this.blockedKeywords.length) {
-          const visibleText = normalizeKeyword(unit.innerText)
+          const content = this.controller.extractContentRepresentation(unit)
+          const visibleText = normalizeKeyword(content?.visibleText)
           if (this.blockedKeywords.some((keyword) => visibleText.includes(keyword))) {
             hiddenTargets.add(filterTarget)
           }

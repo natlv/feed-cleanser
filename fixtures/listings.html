@@ -353,6 +353,35 @@
           : 'Resume demo muting'
       }, 0)
 
+      globalThis.__runContentRepresentationFixtureChecks = () => {
+        const controller = globalThis.__muteByEntitySelector
+        const represent = (name) =>
+          controller.extractContentRepresentation(document.querySelector(`[data-fixture="${name}"]`))
+        const genericListing = represent('generic-seller')
+        const linkedInPost = represent('linkedin-post')
+        const linkedInComment = represent('linkedin-comment')
+        const youtubeVideo = represent('youtube-video')
+        const ebayListing = represent('ebay-listing')
+        const checks = [
+          ['generic listing kind', genericListing.kind === 'listing'],
+          ['generic listing title', genericListing.title === 'Studio headphones'],
+          ['generic listing body', genericListing.body === 'Closed-back headphones with replaceable cushions and a travel case.'],
+          ['generic listing price', genericListing.metadata.price === '$129'],
+          ['keyword-visible text preserved', genericListing.visibleText.includes('ACME Audio') && genericListing.visibleText.includes('Save')],
+          ['semantic text excludes controls', !genericListing.semanticText.includes('ACME Audio') && !genericListing.semanticText.includes('Save')],
+          ['LinkedIn nested comment isolation', linkedInPost.body.includes('The post should resolve to Jane') && !linkedInPost.body.includes('The comment itself should resolve to Alex')],
+          ['LinkedIn comment representation', linkedInComment.kind === 'comment' && linkedInComment.body === 'The comment itself should resolve to Alex.'],
+          ['YouTube video representation', youtubeVideo.kind === 'video' && youtubeVideo.title === 'A clearly attributed video'],
+          ['eBay listing representation', ebayListing.kind === 'listing' && ebayListing.title === 'Sleep earbuds'],
+          ['serializable representation', JSON.parse(JSON.stringify(genericListing)).version === 1],
+        ]
+        return {
+          passed: checks.filter(([, passed]) => passed).length,
+          total: checks.length,
+          checks: checks.map(([name, passed]) => ({ name, passed })),
+        }
+      }
+
       globalThis.__runMuteByEntityFixtureChecks = () => {
         const controller = globalThis.__muteByEntitySelector
         const engine = globalThis.__muteByEntityMuting
@@ -387,7 +416,10 @@
           .hasAttribute('data-mute-by-entity-hidden')
         engine.profiles = previousProfiles
         engine.revealAll()
+        const contentChecks = globalThis.__runContentRepresentationFixtureChecks().checks
+          .map(({ name, passed }) => [`content representation: ${name}`, passed])
         const checks = [
+          ...contentChecks,
           ['generic seller', detect('generic-seller').label === 'ACME Audio'],
           ['generic ownership relationship', detect('generic-seller').relationship === 'owner'],
           ['identity-seeded repeated discovery', discoveredUnits.includes(genericRepeatedUnit)],
