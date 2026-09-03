@@ -167,7 +167,7 @@
 
       <section class="post-section">
         <h2>Nested media and comments</h2>
-        <article class="post-card">
+        <article class="post-card" data-fixture="generic-post">
           <div class="media-card" aria-label="Photo inside the post"><img alt="Blue wave illustration" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' fill='%23bdd8d6'/%3E%3Cpath d='M0 78c22-39 43-43 67-17 17 18 32 13 53-4v63H0z' fill='%232d7581'/%3E%3Cpath d='M7 79c19-24 36-23 54-6 20 19 39 9 59-5' fill='none' stroke='%23f9faf4' stroke-width='8' stroke-linecap='round'/%3E%3Ccircle cx='83' cy='31' r='13' fill='%23f4b26b'/%3E%3C/svg%3E" /></div>
           <div class="post-copy">
             <a class="post-author" rel="author" href="/profiles/maya-chen">Maya Chen</a>
@@ -206,7 +206,7 @@
           </article>
 
           <div class="platform-card" data-testid="mainFeed">
-            <article role="listitem">
+            <article role="listitem" data-fixture="linkedin-current-post">
               <div class="social-context">
                 <a href="https://www.linkedin.com/in/modern-reactor/"><img class="linkedin-avatar" alt="Modern Reactor" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23d7e4e2'/%3E%3C/svg%3E" /></a>
                 <a href="https://www.linkedin.com/in/modern-reactor/">Modern Reactor</a>
@@ -225,7 +225,7 @@
                   is only mentioned in its text.
                 </p>
               </div>
-              <article class="embedded-comment" componentkey="replaceableComment_fixture">
+              <article class="embedded-comment" componentkey="replaceableComment_fixture" data-fixture="linkedin-current-comment">
                 <div componentkey="replaceableComment_fixture">
                   <div componentkey="replaceableComment_fixture">
                     <a href="https://www.linkedin.com/in/modern-commenter/"><img class="linkedin-avatar" alt="Modern Commenter" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23e8d8ca'/%3E%3C/svg%3E" /></a>
@@ -258,7 +258,7 @@
             </div>
           </ytd-video-renderer>
 
-          <ytd-rich-item-renderer class="platform-card">
+          <ytd-rich-item-renderer class="platform-card" data-fixture="youtube-rich-video">
             <div id="content">
               <yt-lockup-view-model>
                 <div class="platform-media" aria-label="Deeply nested YouTube grid thumbnail"><span><span>▷</span></span></div>
@@ -358,21 +358,49 @@
         const represent = (name) =>
           controller.extractContentRepresentation(document.querySelector(`[data-fixture="${name}"]`))
         const genericListing = represent('generic-seller')
+        const genericPost = represent('generic-post')
+        const genericRepeated = represent('generic-repeated-owner')
         const linkedInPost = represent('linkedin-post')
         const linkedInComment = represent('linkedin-comment')
+        const linkedInCurrentPost = represent('linkedin-current-post')
+        const linkedInCurrentComment = represent('linkedin-current-comment')
         const youtubeVideo = represent('youtube-video')
+        const youtubeRichVideo = represent('youtube-rich-video')
+        const carousellListing = represent('carousell-listing')
+        const contentsListing = represent('contents-listing')
+        const etsyListing = represent('etsy-listing')
         const ebayListing = represent('ebay-listing')
         const checks = [
-          ['generic listing kind', genericListing.kind === 'listing'],
-          ['generic listing title', genericListing.title === 'Studio headphones'],
+          ['generic rule', genericListing.provenance.rule === 'generic'],
+          ['generic listing fields', genericListing.kind === 'listing' && genericListing.title === 'Studio headphones'],
           ['generic listing body', genericListing.body === 'Closed-back headphones with replaceable cushions and a travel case.'],
+          ['generic listing author', genericListing.metadata.authorLabel === 'ACME Audio'],
           ['generic listing price', genericListing.metadata.price === '$129'],
           ['keyword-visible text preserved', genericListing.visibleText.includes('ACME Audio') && genericListing.visibleText.includes('Save')],
           ['semantic text excludes controls', !genericListing.semanticText.includes('ACME Audio') && !genericListing.semanticText.includes('Save')],
+          ['generic post fields', genericPost.kind === 'post' && genericPost.title === 'A quiet morning by the water'],
+          ['generic post author', genericPost.metadata.authorLabel === 'Maya Chen'],
+          ['repeated fallback fields', genericRepeated.kind === 'unknown' && genericRepeated.metadata.authorLabel === 'Koi Cat'],
+          ['LinkedIn post rule', linkedInPost.provenance.rule === 'linkedin-post'],
+          ['LinkedIn post author', linkedInPost.metadata.authorLabel === 'Jane Doe'],
           ['LinkedIn nested comment isolation', linkedInPost.body.includes('The post should resolve to Jane') && !linkedInPost.body.includes('The comment itself should resolve to Alex')],
           ['LinkedIn comment representation', linkedInComment.kind === 'comment' && linkedInComment.body === 'The comment itself should resolve to Alex.'],
-          ['YouTube video representation', youtubeVideo.kind === 'video' && youtubeVideo.title === 'A clearly attributed video'],
-          ['eBay listing representation', ebayListing.kind === 'listing' && ebayListing.title === 'Sleep earbuds'],
+          ['LinkedIn comment author', linkedInComment.metadata.authorLabel === 'Alex Kim'],
+          ['current LinkedIn post rule', linkedInCurrentPost.provenance.rule === 'linkedin-post'],
+          ['current LinkedIn post isolation', linkedInCurrentPost.body.includes('Modern Studio owns this post') && !linkedInCurrentPost.body.includes('This comment has a separate owner')],
+          ['current LinkedIn comment representation', linkedInCurrentComment.kind === 'comment' && linkedInCurrentComment.body === 'This comment has a separate owner.'],
+          ['YouTube video representation', youtubeVideo.provenance.rule === 'youtube-video' && youtubeVideo.title === 'A clearly attributed video'],
+          ['YouTube channel metadata', youtubeVideo.metadata.authorLabel === 'Studio North'],
+          ['YouTube rich-grid representation', youtubeRichVideo.title === 'Video in a multi-column grid' && youtubeRichVideo.metadata.authorLabel === 'Grid Studio'],
+          ['Carousell rule', carousellListing.provenance.rule === 'carousell-listing'],
+          ['Carousell fields', carousellListing.title === 'Vintage field watch' && carousellListing.metadata.authorLabel === 'watch.pieces'],
+          ['display-contents Carousell fields', contentsListing.title === 'Technic race car' && contentsListing.metadata.authorLabel === 'brick.driver'],
+          ['Etsy rule', etsyListing.provenance.rule === 'etsy-listing'],
+          ['Etsy fields', etsyListing.title === 'Handmade field watch' && etsyListing.metadata.authorLabel === 'PaperAmazeDigital'],
+          ['Etsy semantic attribution exclusion', !etsyListing.semanticText.includes('PaperAmazeDigital')],
+          ['eBay rule', ebayListing.provenance.rule === 'ebay-listing'],
+          ['eBay fields', ebayListing.title === 'Sleep earbuds' && ebayListing.metadata.authorLabel === 'ankerdirect'],
+          ['eBay semantic attribution exclusion', !ebayListing.semanticText.includes('99.8% positive')],
           ['serializable representation', JSON.parse(JSON.stringify(genericListing)).version === 1],
         ]
         return {

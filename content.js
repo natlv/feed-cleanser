@@ -290,6 +290,74 @@
     },
   ]
 
+  const CONTENT_EXTRACTION_RULES = [
+    {
+      id: 'linkedin-comment',
+      accepts(_controller, unit) {
+        return unit.matches(
+          `${LINKEDIN_COMMENT_UNIT_SELECTOR}, ${LINKEDIN_CURRENT_COMMENT_SELECTOR}`
+        )
+      },
+      extract(controller, unit) {
+        return controller.extractLinkedInContentFields(unit, 'comment', 'linkedin-comment')
+      },
+    },
+    {
+      id: 'linkedin-post',
+      accepts(_controller, unit) {
+        return (
+          unit.matches(LINKEDIN_POST_UNIT_SELECTOR) ||
+          (
+            unit.matches(LINKEDIN_CURRENT_POST_SELECTOR) &&
+            Boolean(unit.closest(LINKEDIN_CURRENT_FEED_SELECTOR))
+          )
+        )
+      },
+      extract(controller, unit) {
+        return controller.extractLinkedInContentFields(unit, 'post', 'linkedin-post')
+      },
+    },
+    {
+      id: 'youtube-video',
+      accepts(_controller, unit) {
+        return unit.matches(YOUTUBE_VIDEO_UNIT_SELECTOR)
+      },
+      extract(controller, unit) {
+        return controller.extractYouTubeContentFields(unit, 'youtube-video')
+      },
+    },
+    {
+      id: 'carousell-listing',
+      accepts(controller, unit) {
+        return (
+          CAROUSELL_LISTING_TEST_ID.test(unit.getAttribute('data-testid') || '') ||
+          controller.hasCarousellSellerLink(unit)
+        )
+      },
+      extract(controller, unit) {
+        return controller.extractCarousellContentFields(unit, 'carousell-listing')
+      },
+    },
+    {
+      id: 'etsy-listing',
+      accepts(_controller, unit) {
+        return unit.matches(ETSY_LISTING_UNIT_SELECTOR)
+      },
+      extract(controller, unit) {
+        return controller.extractEtsyContentFields(unit, 'etsy-listing')
+      },
+    },
+    {
+      id: 'ebay-listing',
+      accepts(_controller, unit) {
+        return unit.matches(EBAY_LISTING_UNIT_SELECTOR)
+      },
+      extract(controller, unit) {
+        return controller.extractEbayContentFields(unit, 'ebay-listing')
+      },
+    },
+  ]
+
   class ExtensionStateStore {
     constructor() {
       this.fixtureState = {}
@@ -865,6 +933,14 @@
     isInNestedTextUnit(element, unit) {
       let current = element.parentElement
       while (current && current !== unit) {
+        if (
+          current.matches(LINKEDIN_CURRENT_COMMENT_SELECTOR) &&
+          unit.matches(LINKEDIN_CURRENT_COMMENT_SELECTOR) &&
+          current.getAttribute('componentkey') === unit.getAttribute('componentkey')
+        ) {
+          current = current.parentElement
+          continue
+        }
         if (current.matches(NESTED_TEXT_UNIT_SELECTOR)) return true
         current = current.parentElement
       }
@@ -879,6 +955,196 @@
         if (value && !values.includes(value)) values.push(value)
       }
       return values
+    }
+
+    getShortestContentFieldText(unit, selector) {
+      if (!selector) return ''
+      return this.getContentFieldTexts(unit, selector)
+        .sort((first, second) => first.length - second.length)[0] || ''
+    }
+
+    extractContentFields(unit, options) {
+      const title = this.getContentFieldTexts(
+        unit,
+        options.titleSelector || CONTENT_HEADING_SELECTOR
+      )[0] || ''
+      const authorLabel = this.getShortestContentFieldText(unit, options.authorSelector)
+      const price = this.getShortestContentFieldText(
+        unit,
+        options.priceSelector || CONTENT_PRICE_SELECTOR
+      )
+      const excludedBodyValues = new Set([title, authorLabel, price].filter(Boolean))
+      const bodyParts = this.getContentFieldTexts(
+        unit,
+        options.bodySelector || CONTENT_BODY_SELECTOR
+      ).filter((value) => !excludedBodyValues.has(value))
+
+      return {
+        kind: options.kind,
+        title,
+        body: bodyParts.join('\n'),
+        metadata: {
+          authorLabel,
+          price,
+        },
+        provenance: {
+          rule: options.ruleId,
+          kind: options.kindSource || options.ruleId,
+          title: title ? 'selector' : 'none',
+          body: bodyParts.length ? 'selector' : 'none',
+          authorLabel: authorLabel ? 'selector' : 'none',
+          price: price ? 'selector' : 'none',
+        },
+      }
+    }
+
+    extractLinkedInContentFields(unit, kind, ruleId) {
+      return this.extractContentFields(unit, {
+        ruleId,
+        kind,
+        titleSelector: CONTENT_HEADING_SELECTOR,
+        bodySelector: [
+          LINKEDIN_TEXT_CONTENT_SELECTOR,
+          '[class*="update-components-text" i]',
+          '[class*="feed-shared-update-v2__description" i]',
+          'p',
+        ].join(','),
+        authorSelector: [
+          '[class*="update-components-actor" i] a[href]',
+          '[class*="comments-post-meta" i] a[href]',
+          'a[class*="comments-post-meta" i]',
+          '[class*="comment-actor" i] a[href]',
+          'a[class*="comment-actor" i]',
+        ].join(','),
+      })
+    }
+
+    extractYouTubeContentFields(unit, ruleId) {
+      return this.extractContentFields(unit, {
+        ruleId,
+        kind: 'video',
+        titleSelector: [
+          'a#video-title',
+          '#video-title',
+          'h3 a[href*="/watch"]',
+          'h3',
+          '[role="heading"]',
+        ].join(','),
+        bodySelector: [
+          '#description-text',
+          '[class*="description-inline-expander" i]',
+          'p',
+        ].join(','),
+        authorSelector: [
+          '#channel-info a[href]',
+          '#channel-name a[href]',
+          'ytd-channel-name a[href]',
+          'a[class*="channel-name" i]',
+        ].join(','),
+      })
+    }
+
+    extractCarousellContentFields(unit, ruleId) {
+      return this.extractContentFields(unit, {
+        ruleId,
+        kind: 'listing',
+        titleSelector: [
+          '[data-testid*="listing-card-title" i]',
+          CONTENT_HEADING_SELECTOR,
+        ].join(','),
+        bodySelector: [
+          '[data-testid*="listing-card-description" i]',
+          '[class*="description" i]',
+          'p',
+        ].join(','),
+        authorSelector: [
+          '[data-testid="listing-card-text-seller-name"]',
+          'a[href*="/u/"]',
+        ].join(','),
+      })
+    }
+
+    extractEtsyContentFields(unit, ruleId) {
+      const fields = this.extractContentFields(unit, {
+        ruleId,
+        kind: 'listing',
+        titleSelector: [
+          'a[data-listing-id]',
+          '[data-testid*="listing-card-title" i]',
+          CONTENT_HEADING_SELECTOR,
+        ].join(','),
+        bodySelector: [
+          '[data-testid*="listing-card-description" i]',
+          '[class*="description" i]',
+          'p',
+        ].join(','),
+        authorSelector: [
+          '[data-testid*="shop-name" i]',
+          '[class*="shop-name" i]',
+        ].join(','),
+      })
+      const bodyParts = fields.body.split('\n').filter(Boolean)
+      if (
+        !fields.metadata.authorLabel &&
+        bodyParts.length > 1 &&
+        this.looksLikeAttributionText(bodyParts[0])
+      ) {
+        fields.metadata.authorLabel = bodyParts.shift()
+        fields.body = bodyParts.join('\n')
+        fields.provenance.authorLabel = 'leading-metadata'
+      }
+      return fields
+    }
+
+    extractEbayContentFields(unit, ruleId) {
+      const fields = this.extractContentFields(unit, {
+        ruleId,
+        kind: 'listing',
+        titleSelector: [
+          'a.s-card__link',
+          'a.s-item__link',
+          CONTENT_HEADING_SELECTOR,
+        ].join(','),
+        bodySelector: [
+          '[class*="description" i]',
+          'p',
+        ].join(','),
+        authorSelector: [
+          '.s-card__attribute-row',
+          '.s-item__seller-info-text',
+        ].join(','),
+      })
+      const itemInfo = this.getEbayItemInfo(unit)
+      const seller = this.findEbaySellerInContainer(unit, itemInfo?.href || location.href)
+      if (seller?.label) {
+        fields.metadata.authorLabel = seller.label
+        fields.provenance.authorLabel = 'ebay-seller-parser'
+      }
+      return fields
+    }
+
+    looksLikeAttributionText(value) {
+      return (
+        value.length <= 80 &&
+        value.split(/\s+/).length <= 6 &&
+        !/[.!?]$/.test(value)
+      )
+    }
+
+    extractGenericContentFields(unit) {
+      const kind = this.inferContentKind(unit)
+      return this.extractContentFields(unit, {
+        ruleId: 'generic',
+        kind: kind.value,
+        kindSource: kind.source,
+        authorSelector: [
+          '[rel~="author"]',
+          '[itemprop="author"]',
+          'a[class*="author" i]',
+          'a[class*="seller" i]',
+          '[class*="owner" i] a[href]',
+        ].join(','),
+      })
     }
 
     inferContentKind(unit) {
@@ -923,33 +1189,25 @@
 
       const visibleText = unit.innerText || ''
       const normalizedVisibleText = normalizeContentText(visibleText)
-      const kind = this.inferContentKind(unit)
-      const title = this.getContentFieldTexts(unit, CONTENT_HEADING_SELECTOR)[0] || ''
-      const bodyParts = this.getContentFieldTexts(unit, CONTENT_BODY_SELECTOR)
-        .filter((value) => value !== title)
-      const body = bodyParts.join('\n')
-      const price = this.getContentFieldTexts(unit, CONTENT_PRICE_SELECTOR)
-        .sort((first, second) => first.length - second.length)[0] || ''
-      const semanticParts = [title, body].filter(Boolean)
+      const rule = CONTENT_EXTRACTION_RULES.find((entry) => entry.accepts(this, unit))
+      const fields = rule
+        ? rule.extract(this, unit)
+        : this.extractGenericContentFields(unit)
+      const semanticParts = [fields.title, fields.body].filter(Boolean)
       const semanticText = semanticParts.length
         ? semanticParts.join('\n')
         : normalizedVisibleText
 
       return {
         version: CONTENT_REPRESENTATION_VERSION,
-        kind: kind.value,
-        title,
-        body,
+        kind: fields.kind,
+        title: fields.title,
+        body: fields.body,
         visibleText,
         semanticText,
-        metadata: {
-          price,
-        },
+        metadata: fields.metadata,
         provenance: {
-          kind: kind.source,
-          title: title ? 'heading' : 'none',
-          body: body ? 'body-elements' : 'none',
-          price: price ? 'price-element' : 'none',
+          ...fields.provenance,
           semanticText: semanticParts.length ? 'structured-fields' : 'visible-text-fallback',
         },
       }

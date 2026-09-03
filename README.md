@@ -13,8 +13,10 @@ The extension currently provides:
 - A global on/off switch that is independent from profile detection
 - Per-hostname muted profile sets stored only on the current device
 - Per-hostname blocked keywords matched case-insensitively against card text
-- Serializable content representations with kind, title, body, price, visible text,
-  semantic text, and extraction provenance
+- Serializable content representations with kind, title, body, author or seller,
+  price, visible text, semantic text, and extraction provenance
+- Ordered LinkedIn, YouTube, Carousell, Etsy, and eBay content-extraction rules
+  with a generic semantic fallback
 - Shared filter-target boundaries so profile and keyword matches collapse their grid or list cells
 - A popup that starts profile detection on demand and lists profiles muted for the current site
 - One-click unmuting from the popup
@@ -126,10 +128,11 @@ The fixture also exposes `__runContentRepresentationFixtureChecks()` and
 `__runMuteByEntityFixtureChecks()`, and records the combined result on the
 document element through `data-fixture-checks`,
 `data-fixture-check-count`, and `data-fixture-check-results`. These deterministic
-checks cover structured content extraction, nested-comment text isolation,
-generic ownership, ambiguity, supported-site rules, canonical URLs, stable IDs,
-unattributed content, repeated-layout filter boundaries, and end-to-end automatic
-filtering of Circlly-shaped generic cards.
+checks cover structured content extraction for every supported site shape,
+nested-comment text isolation, attribution exclusion, generic ownership,
+ambiguity, canonical URLs, stable IDs, unattributed content, repeated-layout
+filter boundaries, and end-to-end automatic filtering of Circlly-shaped generic
+cards.
 
 ## Structure
 
